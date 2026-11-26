@@ -12,12 +12,20 @@ from homeassistant.core import callback
 from homeassistant.helpers.selector import (
     EntitySelector,
     EntitySelectorConfig,
+    LabelSelector,
+    LabelSelectorConfig,
     TextSelector,
     TextSelectorConfig,
     TextSelectorType,
 )
 
-from .const import CONF_CALENDAR_NAME, CONF_DEFAULT_CALENDAR, CONF_SOURCE_CALENDARS, DOMAIN
+from .const import (
+    CONF_CALENDAR_NAME,
+    CONF_DEFAULT_CALENDAR,
+    CONF_SOURCE_CALENDARS,
+    CONF_SOURCE_LABELS,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -38,12 +46,16 @@ def _user_schema(defaults: dict[str, Any] | None = None) -> vol.Schema:
             CONF_CALENDAR_NAME,
             default=defaults.get(CONF_CALENDAR_NAME, ""),
         ): TextSelector(TextSelectorConfig(type=TextSelectorType.TEXT)),
-        vol.Required(
+        vol.Optional(
             CONF_SOURCE_CALENDARS,
             default=defaults.get(CONF_SOURCE_CALENDARS, []),
         ): EntitySelector(
             EntitySelectorConfig(domain="calendar", multiple=True)
         ),
+        vol.Optional(
+            CONF_SOURCE_LABELS,
+            default=defaults.get(CONF_SOURCE_LABELS, []),
+        ): LabelSelector(LabelSelectorConfig(multiple=True)),
     }
 
     # Optional field: use vol.Optional so the UI renders it clearly as optional
@@ -116,10 +128,13 @@ class CalendarMergeConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if not user_input.get(CONF_CALENDAR_NAME, "").strip():
             errors[CONF_CALENDAR_NAME] = "name_required"
         sources = user_input.get(CONF_SOURCE_CALENDARS) or []
-        if not sources:
+        labels = user_input.get(CONF_SOURCE_LABELS) or []
+        if not sources and not labels:
             errors[CONF_SOURCE_CALENDARS] = "no_sources"
         default = user_input.get(CONF_DEFAULT_CALENDAR)
-        if default and default not in sources:
+        # When labels are configured the default calendar may come from a
+        # label-matched entity, which cannot be verified statically here.
+        if default and not labels and default not in sources:
             errors[CONF_DEFAULT_CALENDAR] = "default_not_in_sources"
         return errors
 

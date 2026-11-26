@@ -12,7 +12,7 @@ Combine multiple Home Assistant `calendar.*` entities into a single, new virtual
 
 ## Features
 
-- **Merge any number** of existing `calendar.*` entities into one.
+- **Merge any number** of existing `calendar.*` entities into one — selected individually **or by label** (every `calendar.*` entity carrying a chosen label is included automatically, even ones added later).
 - **Deduplication with source tracking**: if the same event appears in more than one source calendar (same UID, or same title + start time), it is collapsed to a single entry and a note listing every source calendar is appended to the event description.
 - **Full edit support**: selecting an event and using HA's edit/delete UI works transparently — edits and deletes are proxied back to the correct source calendar(s) automatically.
 - **Create new events**: configure a default write calendar and new events created from the merged view are saved there.
@@ -46,7 +46,7 @@ Combine multiple Home Assistant `calendar.*` entities into a single, new virtual
 
 1. Go to **Settings → Devices & Services → Add Integration**.
 2. Search for **Calendar Merge**.
-3. Enter a name and select the source calendars.
+3. Enter a name, then pick source calendars **and/or labels** — at least one of the two is required. All `calendar.*` entities carrying any selected label are merged automatically.
 4. Click **Submit** — a new `calendar.<name>` entity appears immediately.
 
 To edit later: open the integration entry and click **Configure**.
@@ -68,7 +68,15 @@ calendar_merge:
       - calendar.google_family
       - calendar.birthdays
       - calendar.school_holidays
+
+  - name: "Everything tagged 'personal'"
+    labels:                                # optional: merge by label instead of entity IDs
+      - personal
+      - Personal                            # label names are matched case-insensitively too
+    # entity_id and labels can be combined; both are merged together.
 ```
+
+With labels, the merged calendar automatically includes every `calendar.*` entity that has the label (labels are managed per entity under *Settings → Devices & Services → Labels*). Label assignments are re-resolved on every refresh, so adding or removing a label takes effect without restarting HA.
 
 Each entry creates an independent merged calendar entity.  
 **Note:** YAML entries are imported as config entries on startup. Editing them in YAML and restarting HA will update the entry. Deleting a YAML entry will *not* automatically remove the config entry — remove it via the UI.
@@ -85,7 +93,7 @@ Selecting any event in the HA calendar card and using the **Edit** or **Delete**
 | **Edit** a duplicate event | Change is proxied to **all** source calendars that contain it, and the annotation block is stripped before saving |
 | **Delete** a non-duplicate event | Deleted from its source calendar |
 | **Delete** a duplicate event | Deleted from **all** source calendars that contain it |
-| **Create** a new event | Saved to the configured *Default Calendar for New Events* |
+| **Create** a new event | Saved to the configured *Default Calendar for New Events* — which is always part of the merged sources, so the new event shows up in the merged view immediately |
 
 If a source calendar is read-only (e.g. a subscribed CalDAV feed), HA will surface an error for that calendar but still attempt to write to the others.
 
@@ -116,7 +124,9 @@ The `duplicate_events` attribute on the entity exposes a full map of which event
 
 | Attribute | Description |
 |---|---|
-| `source_calendars` | List of all source `calendar.*` entity IDs |
+| `source_calendars` | List of the explicitly configured source `calendar.*` entity IDs |
+| `source_labels` | List of the configured labels |
+| `resolved_source_calendars` | All source entity IDs actually in use (explicit IDs + label-matched calendars + the default calendar, which is always included) |
 | `default_calendar` | The configured default calendar for new events (or `null`) |
 | `duplicate_events` | Dict mapping event keys → list of source calendars (only populated when duplicates exist) |
 

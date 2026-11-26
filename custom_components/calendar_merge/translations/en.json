@@ -7,18 +7,20 @@
         "data": {
           "name": "Merged Calendar Name",
           "entity_id": "Source Calendars",
+          "labels": "Source Calendar Labels",
           "default_calendar": "Default Calendar for New Events"
         },
         "data_description": {
           "name": "The name for the new merged calendar entity.",
-          "entity_id": "Select two or more calendar entities to merge.",
-          "default_calendar": "Optional. New events created from this merged calendar will be saved here. Must be one of the source calendars above."
+          "entity_id": "Optional. Select specific calendar entities to merge. At least one source calendar or label is required.",
+          "labels": "Optional. Merge every calendar entity that has any of these labels. Combined with the source calendars above.",
+          "default_calendar": "Optional. New events created from this merged calendar will be saved here. The default calendar is always included in the merged sources, so its events appear in the merged calendar."
         }
       }
     },
     "error": {
       "name_required": "A name is required.",
-      "no_sources": "Please select at least one source calendar.",
+      "no_sources": "Please select at least one source calendar or label.",
       "default_not_in_sources": "The default calendar must be one of the selected source calendars."
     },
     "abort": {
@@ -32,18 +34,20 @@
         "data": {
           "name": "Merged Calendar Name",
           "entity_id": "Source Calendars",
+          "labels": "Source Calendar Labels",
           "default_calendar": "Default Calendar for New Events"
         },
         "data_description": {
           "name": "The name for the merged calendar entity.",
-          "entity_id": "Select two or more calendar entities to merge.",
-          "default_calendar": "Optional. New events created from this merged calendar will be saved here. Must be one of the source calendars above."
+          "entity_id": "Optional. Select specific calendar entities to merge. At least one source calendar or label is required.",
+          "labels": "Optional. Merge every calendar entity that has any of these labels. Combined with the source calendars above.",
+          "default_calendar": "Optional. New events created from this merged calendar will be saved here. The default calendar is always included in the merged sources, so its events appear in the merged calendar."
         }
       }
     },
     "error": {
       "name_required": "A name is required.",
-      "no_sources": "Please select at least one source calendar.",
+      "no_sources": "Please select at least one source calendar or label.",
       "default_not_in_sources": "The default calendar must be one of the selected source calendars."
     }
   }

@@ -1253,3 +1253,123 @@ def test_labels_without_registries_fall_back_to_explicit_sources(calendar_module
     assert merged.extra_state_attributes["resolved_source_calendars"] == [
         "calendar.google_work"
     ]
+
+
+def test_default_calendar_is_always_included_in_sources(calendar_module):
+    start = datetime(2024, 1, 2, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 2, 10, 0, tzinfo=timezone.utc)
+    entities = {
+        "calendar.a": FakeSourceCalendar(
+            [CalendarEvent(uid="a1", summary="A", start=start, end=end)],
+            _full_features(),
+        ),
+        "calendar.default": FakeSourceCalendar(
+            [
+                CalendarEvent(
+                    uid="d1",
+                    summary="D",
+                    start=datetime(2024, 1, 2, 12, 0, tzinfo=timezone.utc),
+                    end=datetime(2024, 1, 2, 13, 0, tzinfo=timezone.utc),
+                )
+            ],
+            _full_features(),
+        ),
+    }
+    hass = HomeAssistant()
+    hass.data["calendar"] = FakeCalendarComponent(entities)
+    merged = calendar_module.MergedCalendarEntity(
+        hass, "entry-default-source", "Merged", ["calendar.a"], "calendar.default"
+    )
+
+    events = _run(
+        merged.async_get_events(
+            hass,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+
+    assert {e.uid for e in events} == {"a1", "d1"}
+    assert merged.extra_state_attributes["resolved_source_calendars"] == [
+        "calendar.a",
+        "calendar.default",
+    ]
+    assert merged._fetch_stats == {"calendar.a": 1, "calendar.default": 1}
+
+
+def test_default_calendar_not_duplicated_when_already_a_source(calendar_module):
+    hass = HomeAssistant()
+    hass.data["calendar"] = FakeCalendarComponent({})
+    merged = calendar_module.MergedCalendarEntity(
+        hass,
+        "entry-default-dup",
+        "Merged",
+        ["calendar.a", "calendar.default"],
+        "calendar.default",
+    )
+
+    assert merged._effective_source_ids() == ["calendar.a", "calendar.default"]
+
+
+def test_default_calendar_included_when_labels_match_nothing(calendar_module):
+    entities = {
+        "calendar.default": FakeSourceCalendar(
+            [
+                CalendarEvent(
+                    uid="d1",
+                    summary="D",
+                    start=datetime(2024, 1, 2, 9, 0, tzinfo=timezone.utc),
+                    end=datetime(2024, 1, 2, 10, 0, tzinfo=timezone.utc),
+                )
+            ],
+            _full_features(),
+        ),
+    }
+    hass = _label_hass(entities, {})
+    merged = calendar_module.MergedCalendarEntity(
+        hass, "entry-default-labels", "Merged", [], "calendar.default", ["work"]
+    )
+
+    events = _run(
+        merged.async_get_events(
+            hass,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+
+    assert [e.uid for e in events] == ["d1"]
+    assert merged.extra_state_attributes["resolved_source_calendars"] == [
+        "calendar.default"
+    ]
+
+
+def test_created_event_on_default_calendar_appears_in_merged_view(calendar_module):
+    entities = {
+        "calendar.default": FakeSourceCalendar(
+            [], _full_features(), created_event_uid="new-uid"
+        ),
+    }
+    hass = HomeAssistant()
+    hass.data["calendar"] = FakeCalendarComponent(entities)
+    hass.services = FakeServices(entities)
+    merged = calendar_module.MergedCalendarEntity(
+        hass, "entry-default-create", "Merged", [], "calendar.default"
+    )
+
+    _run(
+        merged.async_create_event(
+            summary="Created",
+            start_date_time=datetime(2024, 1, 2, 10, 0, tzinfo=timezone.utc),
+            end_date_time=datetime(2024, 1, 2, 11, 0, tzinfo=timezone.utc),
+        )
+    )
+
+    events = _run(
+        merged.async_get_events(
+            hass,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+    assert [e.uid for e in events] == ["new-uid"]

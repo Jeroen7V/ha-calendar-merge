@@ -93,7 +93,7 @@ Selecting any event in the HA calendar card and using the **Edit** or **Delete**
 | **Edit** a duplicate event | Change is proxied to **all** source calendars that contain it, and the annotation block is stripped before saving |
 | **Delete** a non-duplicate event | Deleted from its source calendar |
 | **Delete** a duplicate event | Deleted from **all** source calendars that contain it |
-| **Create** a new event | Saved to the configured *Default Calendar for New Events* |
+| **Create** a new event | Saved to the configured *Default Calendar for New Events* — which is always part of the merged sources, so the new event shows up in the merged view immediately |
 
 If a source calendar is read-only (e.g. a subscribed CalDAV feed), HA will surface an error for that calendar but still attempt to write to the others.
 
@@ -126,7 +126,7 @@ The `duplicate_events` attribute on the entity exposes a full map of which event
 |---|---|
 | `source_calendars` | List of the explicitly configured source `calendar.*` entity IDs |
 | `source_labels` | List of the configured labels |
-| `resolved_source_calendars` | All source entity IDs actually in use (explicit IDs + label-matched calendars) |
+| `resolved_source_calendars` | All source entity IDs actually in use (explicit IDs + label-matched calendars + the default calendar, which is always included) |
 | `default_calendar` | The configured default calendar for new events (or `null`) |
 | `duplicate_events` | Dict mapping event keys → list of source calendars (only populated when duplicates exist) |
 

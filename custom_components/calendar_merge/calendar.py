@@ -303,7 +303,8 @@ class MergedCalendarEntity(CalendarEntity):
     Sources:
       The explicit source entity IDs plus every calendar entity that carries
       one of the configured labels (resolved via the entity registry on each
-      fetch, so label changes apply without a reload).
+      fetch, so label changes apply without a reload). The default calendar
+      is always included as a source as well.
 
     Read:
       Events are fetched from all sources, deduplicated (by UID, or summary
@@ -366,12 +367,18 @@ class MergedCalendarEntity(CalendarEntity):
     def _effective_source_ids(self) -> list[str]:
         """
         Return the explicit source entity IDs plus every calendar entity that
-        carries one of the configured labels (deduplicated, stable order).
+        carries one of the configured labels, plus the default calendar.
+
+        The default calendar is always included so that events created on it
+        are visible in the merged view even when it was not selected as an
+        explicit source or matched by a label (deduplicated, stable order).
         """
         ids = list(self._source_entity_ids)
         for entity_id in _labeled_calendar_entity_ids(self.hass, self._source_labels):
             if entity_id not in ids:
                 ids.append(entity_id)
+        if self._default_calendar and self._default_calendar not in ids:
+            ids.append(self._default_calendar)
         return ids
 
     @property

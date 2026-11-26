@@ -13,6 +13,7 @@ from .const import (
     CONF_CALENDAR_NAME,
     CONF_DEFAULT_CALENDAR,
     CONF_SOURCE_CALENDARS,
+    CONF_SOURCE_LABELS,
     DOMAIN,
     PLATFORMS,
 )
@@ -25,8 +26,15 @@ _LOGGER = logging.getLogger(__name__)
 def _validate_yaml_entry(entry: dict) -> dict:
     """Validate invariants for a YAML-configured merge entry."""
     sources = entry.get(CONF_SOURCE_CALENDARS) or []
+    labels = entry.get(CONF_SOURCE_LABELS) or []
+    if not sources and not labels:
+        raise vol.Invalid(
+            f"At least one of {CONF_SOURCE_CALENDARS} or {CONF_SOURCE_LABELS} is required"
+        )
     default = entry.get(CONF_DEFAULT_CALENDAR)
-    if default and default not in sources:
+    # When labels are configured the default calendar may come from a
+    # label-matched entity, which cannot be verified statically here.
+    if default and not labels and default not in sources:
         raise vol.Invalid(
             f"{CONF_DEFAULT_CALENDAR} must be one of {CONF_SOURCE_CALENDARS}"
         )
@@ -37,8 +45,11 @@ _ENTRY_SCHEMA = vol.All(
     vol.Schema(
         {
             vol.Required(CONF_CALENDAR_NAME): cv.string,
-            vol.Required(CONF_SOURCE_CALENDARS): vol.All(
+            vol.Optional(CONF_SOURCE_CALENDARS): vol.All(
                 cv.ensure_list, [cv.entity_id]
+            ),
+            vol.Optional(CONF_SOURCE_LABELS): vol.All(
+                cv.ensure_list, [cv.string]
             ),
             vol.Optional(CONF_DEFAULT_CALENDAR): cv.entity_id,
         }

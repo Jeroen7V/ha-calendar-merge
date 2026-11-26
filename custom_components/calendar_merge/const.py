@@ -3,6 +3,7 @@
 DOMAIN = "calendar_merge"
 
 CONF_SOURCE_CALENDARS = "entity_id"
+CONF_SOURCE_LABELS = "labels"
 CONF_CALENDAR_NAME = "name"
 CONF_DEFAULT_CALENDAR = "default_calendar"
 

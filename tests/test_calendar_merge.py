@@ -54,6 +54,28 @@ class FakeCalendarComponent:
         return self._entities.get(entity_id)
 
 
+class FakeEntityRegistryEntry:
+    def __init__(self, domain: str, labels=()) -> None:
+        self.domain = domain
+        self.labels = frozenset(labels)
+
+
+class FakeEntityRegistry:
+    def __init__(self, entities: dict[str, FakeEntityRegistryEntry]) -> None:
+        self.entities = entities
+
+
+class FakeLabelEntry:
+    def __init__(self, label_id: str, name: str) -> None:
+        self.label_id = label_id
+        self.name = name
+
+
+class FakeLabelRegistry:
+    def __init__(self, labels: dict[str, FakeLabelEntry]) -> None:
+        self.labels = labels
+
+
 class FakeSourceCalendar(CalendarEntity):
     def __init__(
         self,
@@ -186,6 +208,14 @@ def calendar_module(monkeypatch: pytest.MonkeyPatch):
     entity_platform_mod = types.ModuleType("homeassistant.helpers.entity_platform")
     entity_platform_mod.AddEntitiesCallback = object
 
+    er_mod = types.ModuleType("homeassistant.helpers.entity_registry")
+    er_mod.DATA_REGISTRY = "entity_registry"
+    er_mod.async_get = lambda hass: hass.data[er_mod.DATA_REGISTRY]
+
+    lr_mod = types.ModuleType("homeassistant.helpers.label_registry")
+    lr_mod.DATA_REGISTRY = "label_registry"
+    lr_mod.async_get = lambda hass: hass.data[lr_mod.DATA_REGISTRY]
+
     dt_mod = types.ModuleType("homeassistant.util.dt")
     dt_mod.as_local = (
         lambda value: value.replace(tzinfo=timezone.utc)
@@ -212,6 +242,8 @@ def calendar_module(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setitem(sys.modules, "homeassistant.exceptions", exceptions_mod)
     monkeypatch.setitem(sys.modules, "homeassistant.helpers", types.ModuleType("homeassistant.helpers"))
     monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_platform", entity_platform_mod)
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.entity_registry", er_mod)
+    monkeypatch.setitem(sys.modules, "homeassistant.helpers.label_registry", lr_mod)
     monkeypatch.setitem(sys.modules, "homeassistant.util", util_mod)
     monkeypatch.setitem(sys.modules, "homeassistant.util.dt", dt_mod)
 
@@ -1026,3 +1058,198 @@ def test_delete_reports_capability_and_runtime_errors(calendar_module):
     message = str(exc.value)
     assert "does not support deleting events" in message
     assert "boom-delete" in message
+
+
+def _full_features() -> CalendarEntityFeature:
+    return (
+        CalendarEntityFeature.CREATE_EVENT
+        | CalendarEntityFeature.UPDATE_EVENT
+        | CalendarEntityFeature.DELETE_EVENT
+    )
+
+
+def _label_hass(entities: dict[str, CalendarEntity], registry_entries: dict) -> HomeAssistant:
+    hass = HomeAssistant()
+    hass.data["calendar"] = FakeCalendarComponent(entities)
+    hass.data["entity_registry"] = FakeEntityRegistry(registry_entries)
+    hass.data["label_registry"] = FakeLabelRegistry(
+        {"work": FakeLabelEntry("work", "Work"), "personal": FakeLabelEntry("personal", "Personal")}
+    )
+    return hass
+
+
+def test_labels_resolve_matching_calendar_entities(calendar_module):
+    entities = {
+        "calendar.work_a": FakeSourceCalendar(
+            [
+                CalendarEvent(
+                    uid="w1",
+                    summary="Standup",
+                    start=datetime(2024, 1, 2, 9, 0, tzinfo=timezone.utc),
+                    end=datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc),
+                )
+            ],
+            _full_features(),
+        ),
+        "calendar.work_b": FakeSourceCalendar(
+            [
+                CalendarEvent(
+                    uid="w2",
+                    summary="Review",
+                    start=datetime(2024, 1, 2, 10, 0, tzinfo=timezone.utc),
+                    end=datetime(2024, 1, 2, 11, 0, tzinfo=timezone.utc),
+                )
+            ],
+            _full_features(),
+        ),
+        "calendar.personal": FakeSourceCalendar(
+            [
+                CalendarEvent(
+                    uid="p1",
+                    summary="Dentist",
+                    start=datetime(2024, 1, 2, 15, 0, tzinfo=timezone.utc),
+                    end=datetime(2024, 1, 2, 16, 0, tzinfo=timezone.utc),
+                )
+            ],
+            _full_features(),
+        ),
+    }
+    hass = _label_hass(
+        entities,
+        {
+            "calendar.work_a": FakeEntityRegistryEntry("calendar", {"work"}),
+            "calendar.work_b": FakeEntityRegistryEntry("calendar", {"work"}),
+            "calendar.personal": FakeEntityRegistryEntry("calendar", {"personal"}),
+            "sensor.not_a_calendar": FakeEntityRegistryEntry("sensor", {"work"}),
+        },
+    )
+    merged = calendar_module.MergedCalendarEntity(
+        hass, "entry-labels", "Merged", [], None, ["work"]
+    )
+
+    events = _run(
+        merged.async_get_events(
+            hass,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+
+    assert {e.uid for e in events} == {"w1", "w2"}
+    attrs = merged.extra_state_attributes
+    assert attrs["source_labels"] == ["work"]
+    assert attrs["resolved_source_calendars"] == [
+        "calendar.work_a",
+        "calendar.work_b",
+    ]
+    assert attrs["last_fetch_stats"] == {
+        "calendar.work_a": 1,
+        "calendar.work_b": 1,
+    }
+
+
+def test_label_name_matches_label_id_via_label_registry(calendar_module):
+    entities = {
+        "calendar.work_a": FakeSourceCalendar(
+            [
+                CalendarEvent(
+                    uid="w1",
+                    summary="Standup",
+                    start=datetime(2024, 1, 2, 9, 0, tzinfo=timezone.utc),
+                    end=datetime(2024, 1, 2, 9, 30, tzinfo=timezone.utc),
+                )
+            ],
+            _full_features(),
+        ),
+    }
+    hass = _label_hass(
+        entities,
+        {"calendar.work_a": FakeEntityRegistryEntry("calendar", {"work"})},
+    )
+    merged = calendar_module.MergedCalendarEntity(
+        hass, "entry-label-name", "Merged", [], None, ["Work"]
+    )
+
+    events = _run(
+        merged.async_get_events(
+            hass,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+
+    assert [e.uid for e in events] == ["w1"]
+
+
+def test_explicit_sources_and_labels_are_merged_and_deduplicated(calendar_module):
+    shared_uid = "shared-1"
+    start = datetime(2024, 1, 2, 9, 0, tzinfo=timezone.utc)
+    end = datetime(2024, 1, 2, 10, 0, tzinfo=timezone.utc)
+    entities = {
+        "calendar.explicit": FakeSourceCalendar(
+            [CalendarEvent(uid=shared_uid, summary="Sync", start=start, end=end)],
+            _full_features(),
+        ),
+        "calendar.labeled": FakeSourceCalendar(
+            [CalendarEvent(uid=shared_uid, summary="Sync", start=start, end=end)],
+            _full_features(),
+        ),
+    }
+    hass = _label_hass(
+        entities,
+        {"calendar.labeled": FakeEntityRegistryEntry("calendar", {"work"})},
+    )
+    merged = calendar_module.MergedCalendarEntity(
+        hass, "entry-mixed", "Merged", ["calendar.explicit"], None, ["work"]
+    )
+
+    events = _run(
+        merged.async_get_events(
+            hass,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+
+    assert len(events) == 1
+    description = events[0].description or ""
+    assert "calendar.explicit" in description
+    assert "calendar.labeled" in description
+    assert merged.extra_state_attributes["resolved_source_calendars"] == [
+        "calendar.explicit",
+        "calendar.labeled",
+    ]
+
+
+def test_labels_without_registries_fall_back_to_explicit_sources(calendar_module):
+    entities = {
+        "calendar.google_work": FakeSourceCalendar(
+            [
+                CalendarEvent(
+                    uid="g1",
+                    summary="Meeting",
+                    start=datetime(2024, 1, 2, 9, 0, tzinfo=timezone.utc),
+                    end=datetime(2024, 1, 2, 10, 0, tzinfo=timezone.utc),
+                )
+            ],
+            _full_features(),
+        ),
+    }
+    hass = HomeAssistant()
+    hass.data["calendar"] = FakeCalendarComponent(entities)
+    merged = calendar_module.MergedCalendarEntity(
+        hass, "entry-no-registry", "Merged", ["calendar.google_work"], None, ["work"]
+    )
+
+    events = _run(
+        merged.async_get_events(
+            hass,
+            datetime(2024, 1, 1, tzinfo=timezone.utc),
+            datetime(2024, 1, 3, tzinfo=timezone.utc),
+        )
+    )
+
+    assert [e.uid for e in events] == ["g1"]
+    assert merged.extra_state_attributes["resolved_source_calendars"] == [
+        "calendar.google_work"
+    ]

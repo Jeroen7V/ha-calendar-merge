@@ -14,6 +14,8 @@ from homeassistant.components.calendar import DOMAIN as CALENDAR_DOMAIN
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
@@ -21,6 +23,7 @@ from .const import (
     CONF_CALENDAR_NAME,
     CONF_DEFAULT_CALENDAR,
     CONF_SOURCE_CALENDARS,
+    CONF_SOURCE_LABELS,
     DOMAIN,
     LOOKAHEAD_HOURS,
     MERGE_BLOCK_SENTINEL,
@@ -44,10 +47,15 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     name: str = data.get(CONF_CALENDAR_NAME, entry.title)
     source_ids: list[str] = data.get(CONF_SOURCE_CALENDARS, [])
+    source_labels: list[str] = data.get(CONF_SOURCE_LABELS, [])
     default_calendar: str | None = data.get(CONF_DEFAULT_CALENDAR)
 
     async_add_entities(
-        [MergedCalendarEntity(hass, entry.entry_id, name, source_ids, default_calendar)],
+        [
+            MergedCalendarEntity(
+                hass, entry.entry_id, name, source_ids, default_calendar, source_labels
+            )
+        ],
         update_before_add=True,
     )
 
@@ -224,6 +232,66 @@ def _source_supports(entity: CalendarEntity, feature: CalendarEntityFeature) -> 
     return bool(supported & feature)
 
 
+def _normalize_label_ids(hass: HomeAssistant, labels: list[str]) -> set[str]:
+    """
+    Normalize configured label values to label IDs.
+
+    Users may configure either a label ID (e.g. "work") or a label name
+    (e.g. "Work"). The label registry maps names to IDs, so consult it when
+    available; always keep the raw (lowercased) values as IDs as well, since
+    label IDs are slugified names and usually match the lowercased name.
+    """
+    wanted = {str(label).strip().lower() for label in labels if str(label).strip()}
+    if not wanted:
+        return set()
+    label_ids = set(wanted)
+    try:
+        label_registry = lr.async_get(hass)
+        for label_id, label_entry in label_registry.labels.items():
+            name = (getattr(label_entry, "name", "") or "").strip().lower()
+            if label_id.lower() in wanted or (name and name in wanted):
+                label_ids.add(label_id)
+    except Exception:  # noqa: BLE001
+        _LOGGER.debug(
+            "Calendar Merge: label registry unavailable; matching labels by ID only",
+            exc_info=True,
+        )
+    return label_ids
+
+
+def _labeled_calendar_entity_ids(hass: HomeAssistant, labels: list[str]) -> list[str]:
+    """
+    Return all calendar.* entity IDs that carry at least one of the given labels.
+
+    Resolved against the entity registry on every call so label assignments
+    (and newly added calendar entities) are picked up without a reload.
+    """
+    if not labels:
+        return []
+    label_ids = _normalize_label_ids(hass, labels)
+    if not label_ids:
+        return []
+    try:
+        registry = er.async_get(hass)
+    except Exception:  # noqa: BLE001
+        _LOGGER.warning(
+            "Calendar Merge: entity registry unavailable; cannot resolve labels %s",
+            labels,
+        )
+        return []
+    matched: list[str] = []
+    for entity_id, entry in registry.entities.items():
+        if getattr(entry, "domain", None) != CALENDAR_DOMAIN:
+            continue
+        entry_labels = {
+            str(label).lower() for label in (getattr(entry, "labels", None) or ())
+        }
+        if entry_labels & label_ids:
+            matched.append(entity_id)
+    matched.sort()
+    return matched
+
+
 # ---------------------------------------------------------------------------
 # Entity
 # ---------------------------------------------------------------------------
@@ -231,6 +299,11 @@ def _source_supports(entity: CalendarEntity, feature: CalendarEntityFeature) -> 
 class MergedCalendarEntity(CalendarEntity):
     """
     A virtual CalendarEntity that merges events from multiple source calendars.
+
+    Sources:
+      The explicit source entity IDs plus every calendar entity that carries
+      one of the configured labels (resolved via the entity registry on each
+      fetch, so label changes apply without a reload).
 
     Read:
       Events are fetched from all sources, deduplicated (by UID, or summary
@@ -267,11 +340,13 @@ class MergedCalendarEntity(CalendarEntity):
         name: str,
         source_entity_ids: list[str],
         default_calendar: str | None,
+        source_labels: list[str] | None = None,
     ) -> None:
         self.hass = hass
         self._entry_id = entry_id
         self._attr_name = name
         self._source_entity_ids = source_entity_ids
+        self._source_labels = list(source_labels or [])
         self._default_calendar = default_calendar
         self._attr_unique_id = entry_id
         self._event: CalendarEvent | None = None
@@ -288,6 +363,17 @@ class MergedCalendarEntity(CalendarEntity):
     def event(self) -> CalendarEvent | None:
         return self._event
 
+    def _effective_source_ids(self) -> list[str]:
+        """
+        Return the explicit source entity IDs plus every calendar entity that
+        carries one of the configured labels (deduplicated, stable order).
+        """
+        ids = list(self._source_entity_ids)
+        for entity_id in _labeled_calendar_entity_ids(self.hass, self._source_labels):
+            if entity_id not in ids:
+                ids.append(entity_id)
+        return ids
+
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         duplicates = {
@@ -297,6 +383,8 @@ class MergedCalendarEntity(CalendarEntity):
         }
         return {
             "source_calendars": self._source_entity_ids,
+            "source_labels": self._source_labels,
+            "resolved_source_calendars": self._effective_source_ids(),
             "default_calendar": self._default_calendar,
             "duplicate_events": duplicates,
             "last_fetch_stats": self._fetch_stats,
@@ -504,7 +592,7 @@ class MergedCalendarEntity(CalendarEntity):
         end_date = now + timedelta(days=365 * 5)
         owners: list[str] = []
 
-        for entity_id in self._source_entity_ids:
+        for entity_id in self._effective_source_ids():
             entity = self._resolve_entity(entity_id)
             if entity is None:
                 continue
@@ -626,7 +714,7 @@ class MergedCalendarEntity(CalendarEntity):
         # Track per-source stats for diagnostics
         fetch_stats: dict[str, int | str] = {}
 
-        for entity_id in self._source_entity_ids:
+        for entity_id in self._effective_source_ids():
             entity = self._resolve_entity(entity_id)
             if entity is None:
                 fetch_stats[entity_id] = "NOT FOUND"

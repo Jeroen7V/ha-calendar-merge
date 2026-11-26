@@ -79,6 +79,8 @@ def _install_ha_stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     selector_mod = types.ModuleType("homeassistant.helpers.selector")
     selector_mod.EntitySelector = lambda *_args, **_kwargs: object()
     selector_mod.EntitySelectorConfig = lambda *_args, **_kwargs: object()
+    selector_mod.LabelSelector = lambda *_args, **_kwargs: object()
+    selector_mod.LabelSelectorConfig = lambda *_args, **_kwargs: object()
     selector_mod.TextSelector = lambda *_args, **_kwargs: object()
     selector_mod.TextSelectorConfig = lambda *_args, **_kwargs: object()
     selector_mod.TextSelectorType = types.SimpleNamespace(TEXT="text")
@@ -199,3 +201,110 @@ def test_yaml_rejects_default_calendar_outside_sources(modules):
         init_mod.CONFIG_SCHEMA(cfg)
 
     assert const.CONF_DEFAULT_CALENDAR in str(err.value)
+
+
+def test_yaml_labels_only_validates(modules):
+    init_mod, _flow_mod, const = modules
+    cfg = {
+        "calendar_merge": [
+            {
+                "name": "Personal",
+                "labels": ["personal", "Personal"],
+            }
+        ]
+    }
+    validated = init_mod.CONFIG_SCHEMA(cfg)
+    assert validated["calendar_merge"][0][const.CONF_SOURCE_LABELS] == [
+        "personal",
+        "Personal",
+    ]
+
+
+def test_yaml_labels_combined_with_entity_ids_validate(modules):
+    init_mod, _flow_mod, const = modules
+    cfg = {
+        "calendar_merge": [
+            {
+                "name": "Work",
+                "entity_id": ["calendar.google_work"],
+                "labels": ["work"],
+                "default_calendar": "calendar.google_work",
+            }
+        ]
+    }
+    validated = init_mod.CONFIG_SCHEMA(cfg)
+    entry = validated["calendar_merge"][0]
+    assert entry[const.CONF_SOURCE_CALENDARS] == ["calendar.google_work"]
+    assert entry[const.CONF_SOURCE_LABELS] == ["work"]
+
+
+def test_yaml_rejects_entry_without_sources_or_labels(modules):
+    init_mod, _flow_mod, const = modules
+    cfg = {"calendar_merge": [{"name": "Empty"}]}
+
+    with pytest.raises(Exception) as err:
+        init_mod.CONFIG_SCHEMA(cfg)
+
+    assert const.CONF_SOURCE_LABELS in str(err.value)
+
+
+def test_yaml_allows_default_calendar_outside_sources_when_labels_present(modules):
+    init_mod, _flow_mod, const = modules
+    cfg = {
+        "calendar_merge": [
+            {
+                "name": "Work",
+                "entity_id": ["calendar.google_work"],
+                "labels": ["work"],
+                "default_calendar": "calendar.label_matched",
+            }
+        ]
+    }
+    validated = init_mod.CONFIG_SCHEMA(cfg)
+    assert validated["calendar_merge"][0][const.CONF_DEFAULT_CALENDAR] == (
+        "calendar.label_matched"
+    )
+
+
+def test_config_flow_validate_accepts_label_only_sources(modules):
+    _init_mod, flow_mod, const = modules
+    errors = flow_mod.CalendarMergeConfigFlow._validate(
+        {
+            const.CONF_CALENDAR_NAME: "Personal",
+            const.CONF_SOURCE_LABELS: ["personal"],
+        }
+    )
+    assert errors == {}
+
+
+def test_config_flow_validate_requires_source_or_label(modules):
+    _init_mod, flow_mod, const = modules
+    errors = flow_mod.CalendarMergeConfigFlow._validate(
+        {const.CONF_CALENDAR_NAME: "Empty"}
+    )
+    assert errors[const.CONF_SOURCE_CALENDARS] == "no_sources"
+
+
+def test_config_flow_validate_still_rejects_default_outside_sources_without_labels(modules):
+    _init_mod, flow_mod, const = modules
+    errors = flow_mod.CalendarMergeConfigFlow._validate(
+        {
+            const.CONF_CALENDAR_NAME: "Work",
+            const.CONF_SOURCE_CALENDARS: ["calendar.google_work"],
+            const.CONF_DEFAULT_CALENDAR: "calendar.personal",
+        }
+    )
+    assert errors[const.CONF_DEFAULT_CALENDAR] == "default_not_in_sources"
+
+
+def test_config_flow_validate_allows_default_outside_sources_with_labels(modules):
+    _init_mod, flow_mod, const = modules
+    errors = flow_mod.CalendarMergeConfigFlow._validate(
+        {
+            const.CONF_CALENDAR_NAME: "Work",
+            const.CONF_SOURCE_CALENDARS: ["calendar.google_work"],
+            const.CONF_SOURCE_LABELS: ["work"],
+            const.CONF_DEFAULT_CALENDAR: "calendar.label_matched",
+        }
+    )
+    assert const.CONF_DEFAULT_CALENDAR not in errors
